@@ -1,0 +1,13 @@
+# Evaluation questions — one per line, # lines are comments.
+# These run on every eval sweep so keep them representative and stable.
+
+What are the graduation requirements?
+How many credit hours are required to complete the program?
+What is the process for filing a grievance or academic appeal?
+What are the rules around incomplete grades?
+How does a student apply for a leave of absence?
+What financial aid options are available to graduate students?
+Who should a student contact if they have a conflict with their advisor?
+What is the policy on academic integrity and plagiarism?
+How are qualifying exams structured and when must they be completed?
+What is the deadline to submit a thesis or dissertation?
