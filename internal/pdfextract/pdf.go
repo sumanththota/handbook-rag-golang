@@ -4,12 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os/exec"
 	"strings"
 	"time"
-
-	"github.com/ledongthuc/pdf"
-	rscpdf "rsc.io/pdf"
 )
 
 type PageText struct {
@@ -18,116 +16,14 @@ type PageText struct {
 }
 
 func ExtractByPage(path string) ([]PageText, error) {
-	pages, err := extractWithLedongthuc(path)
-	if err == nil && len(pages) > 0 {
-		return pages, nil
-	}
-
-	// Fallback parser for PDFs that fail on ledongthuc stream handling.
-	fallbackPages, fallbackErr := extractWithRSC(path)
-	if fallbackErr == nil && len(fallbackPages) > 0 {
-		return fallbackPages, nil
-	}
-
-	pythonPages, pythonErr := extractWithPython(path)
-	if pythonErr == nil && len(pythonPages) > 0 {
-		return pythonPages, nil
-	}
-
-	if err != nil && fallbackErr != nil && pythonErr != nil {
-		return nil, fmt.Errorf("primary parser failed: %v; fallback parser failed: %v; python parser failed: %v", err, fallbackErr, pythonErr)
-	}
-	return nil, fmt.Errorf("could not extract text from pdf")
-}
-
-func extractWithLedongthuc(path string) ([]PageText, error) {
-	f, reader, err := pdf.Open(path)
+	log.Printf("[pdfextract] start path=%s", path)
+	pages, err := extractWithPython(path)
 	if err != nil {
-		return nil, fmt.Errorf("open pdf: %w", err)
+		log.Printf("[pdfextract] parser=python failed err=%v", err)
+		return nil, fmt.Errorf("extract text with python parser: %w", err)
 	}
-	defer f.Close()
-
-	total := reader.NumPage()
-	out := make([]PageText, 0, total)
-
-	for i := 1; i <= total; i++ {
-		page := reader.Page(i)
-		if page.V.IsNull() {
-			continue
-		}
-
-		text, err := page.GetPlainText(nil)
-		if err != nil {
-			return nil, fmt.Errorf("extract text for page %d: %w", i, err)
-		}
-
-		trimmed := strings.TrimSpace(text)
-		if trimmed == "" {
-			continue
-		}
-
-		out = append(out, PageText{
-			Page: i,
-			Text: trimmed,
-		})
-	}
-
-	return out, nil
-}
-
-func extractWithRSC(path string) ([]PageText, error) {
-	reader, err := rscpdf.Open(path)
-	if err != nil {
-		return nil, fmt.Errorf("open pdf: %w", err)
-	}
-
-	total := reader.NumPage()
-	out := make([]PageText, 0, total)
-	for i := 1; i <= total; i++ {
-		p := reader.Page(i)
-		if p.V.IsNull() {
-			continue
-		}
-
-		content, err := safePageContent(p)
-		if err != nil {
-			continue
-		}
-		var b strings.Builder
-		for _, t := range content.Text {
-			if strings.TrimSpace(t.S) == "" {
-				continue
-			}
-			b.WriteString(t.S)
-			b.WriteByte(' ')
-		}
-
-		text := strings.TrimSpace(b.String())
-		if text == "" {
-			continue
-		}
-
-		out = append(out, PageText{
-			Page: i,
-			Text: text,
-		})
-	}
-
-	if len(out) == 0 {
-		return nil, fmt.Errorf("no extractable text from rsc parser")
-	}
-
-	return out, nil
-}
-
-func safePageContent(p rscpdf.Page) (content rscpdf.Content, err error) {
-	defer func() {
-		if r := recover(); r != nil {
-			err = fmt.Errorf("panic while reading page content: %v", r)
-		}
-	}()
-	content = p.Content()
-	return content, nil
+	log.Printf("[pdfextract] parser=python pages=%d", len(pages))
+	return pages, nil
 }
 
 func extractWithPython(path string) ([]PageText, error) {

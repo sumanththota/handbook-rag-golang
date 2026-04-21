@@ -12,7 +12,6 @@ type evalRecord struct {
 	Timestamp       string      `json:"timestamp"`
 	ChunkWords      int         `json:"chunk_words"`
 	TopK            int         `json:"top_k"`
-	Collection      string      `json:"collection"`
 	Question        string      `json:"question"`
 	RetrievedChunks []evalChunk `json:"retrieved_chunks"`
 	AvgScore        float64     `json:"avg_score"`
@@ -25,7 +24,7 @@ type evalChunk struct {
 	Score float64 `json:"score"`
 }
 
-func handleDashboard(experimentsPath string) http.HandlerFunc {
+func handleDashboard() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		fmt.Fprint(w, dashboardHTML)

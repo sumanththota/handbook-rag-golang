@@ -28,7 +28,6 @@ type experimentRecord struct {
 	Timestamp       string        `json:"timestamp"`
 	ChunkWords      int           `json:"chunk_words"`
 	TopK            int           `json:"top_k"`
-	Collection      string        `json:"collection"`
 	Question        string        `json:"question"`
 	RetrievedChunks []chunkResult `json:"retrieved_chunks"`
 	AvgScore        float64       `json:"avg_score"`
@@ -130,7 +129,6 @@ func main() {
 			Timestamp:       time.Now().UTC().Format(time.RFC3339),
 			ChunkWords:      *chunkWords,
 			TopK:            *topK,
-			Collection:      collection,
 			Question:        q,
 			RetrievedChunks: chunks,
 			AvgScore:        avgScore,

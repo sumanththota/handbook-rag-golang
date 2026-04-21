@@ -78,7 +78,7 @@ func main() {
 	mux.HandleFunc("/ingest", handleIngest(ragSvc))
 	mux.HandleFunc("/chat/start", handleChatStart)
 	mux.HandleFunc("/chat/stream", handleChatStream(ragSvc, providerClients, apiKeys))
-	mux.HandleFunc("/dashboard", handleDashboard(experimentsPath))
+	mux.HandleFunc("/dashboard", handleDashboard())
 	mux.HandleFunc("/dashboard/data", handleDashboardData(experimentsPath))
 
 	addr := ":" + cfg.Port
