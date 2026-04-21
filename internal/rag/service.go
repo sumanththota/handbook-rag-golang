@@ -78,7 +78,7 @@ func (s *Service) Ingest(ctx context.Context) (int, error) {
 	}
 	log.Printf("[rag][ingest] qdrant collection ready: %s", s.collection)
 
-	pages, err := pdfextract.ExtractByPage(s.pdfPath)
+	pages, err := pdfextract.ExtractByPage(ctx, s.pdfPath)
 	if err != nil {
 		return 0, fmt.Errorf("extract pdf: %w", err)
 	}
@@ -135,12 +135,33 @@ func (s *Service) BuildPrompt(ctx context.Context, question string) (string, err
 		contextBuilder.WriteString(fmt.Sprintf("[Page %d]: %s\n\n", r.Page, r.Text))
 	}
 
-	prompt := fmt.Sprintf(
-		"Question:\n%s\n\nContext:\n%s\nRespond only from context and include page citations.",
-		question,
+
+	userPrompt := fmt.Sprintf(
+		`Context (retrieved from handbook):
+	%s
+	
+	---
+	
+	Question: %s
+	
+	Think through the following before responding:
+	1. Is this a casual or conversational question that doesn't require handbook knowledge?
+	2. Does the context contain a clear answer to the question?
+	3. Is a citation actually necessary to support this answer?
+	4. Use normal English spacing between words (never merge words, e.g. write "must satisfy" not "mustsatisfy").
+	
+	Then respond using this format:
+	
+	[Your response here. Only append a citation like (Section X.X, p.N) if the answer references a specific policy, rule, date, or procedure from the handbook. Do not cite for greetings, simple clarifications, or conversational replies.]
+	`,
 		contextBuilder.String(),
+		question,
 	)
-	log.Printf("[rag][query] assembled prompt_chars=%d", len(prompt))
+
+
+
+
+	log.Printf("[rag][query] assembled prompt_chars=%d", len(userPrompt))
 	log.Printf("[rag][query] retrieval complete duration=%s", time.Since(start))
-	return prompt, nil
+	return userPrompt, nil
 }

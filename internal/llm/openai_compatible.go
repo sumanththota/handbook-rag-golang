@@ -32,7 +32,10 @@ func (c *OpenAICompatibleClient) StreamAnswer(ctx context.Context, apiKey, model
 		"messages": []map[string]string{
 			{
 				"role":    "system",
-				"content": "Answer using only the provided context. Cite page numbers.",
+				"content": `You are a helpful assistant for the University Student Handbook.
+Answer questions using only the provided handbook context.
+If the answer is not in the context, respond with: "I couldn't find that in the handbook. Please contact the relevant university office."
+Never fabricate policies, dates, or procedures.`,
 			},
 			{
 				"role":    "user",

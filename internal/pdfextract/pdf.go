@@ -5,9 +5,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"os"
 	"os/exec"
 	"strings"
 	"time"
+
+	"handbook-rag/internal/llamaparse"
 )
 
 type PageText struct {
@@ -15,8 +18,41 @@ type PageText struct {
 	Text string
 }
 
-func ExtractByPage(path string) ([]PageText, error) {
+// ExtractByPage reads the PDF at path. If LLAMA_CLOUD_API_KEY is set, uses LlamaCloud LlamaParse;
+// otherwise falls back to local Python (pypdf / PyPDF2).
+func ExtractByPage(ctx context.Context, path string) ([]PageText, error) {
 	log.Printf("[pdfextract] start path=%s", path)
+
+	key := strings.TrimSpace(os.Getenv("LLAMA_CLOUD_API_KEY"))
+	if key != "" {
+		tier := strings.TrimSpace(os.Getenv("LLAMAPARSE_TIER"))
+		if tier == "" {
+			tier = "cost_effective"
+		}
+		pages, err := llamaparse.ExtractPages(ctx, key, path, tier)
+		if err != nil {
+			log.Printf("[pdfextract] parser=llamaparse failed err=%v", err)
+			return nil, err
+		}
+		out := make([]PageText, 0, len(pages))
+		for _, p := range pages {
+			t := strings.TrimSpace(p.Text)
+			if t == "" {
+				continue
+			}
+			n := p.Number
+			if n <= 0 {
+				n = len(out) + 1
+			}
+			out = append(out, PageText{Page: n, Text: t})
+		}
+		if len(out) == 0 {
+			return nil, fmt.Errorf("llamaparse: no non-empty pages")
+		}
+		log.Printf("[pdfextract] parser=llamaparse pages=%d tier=%s", len(out), tier)
+		return out, nil
+	}
+
 	pages, err := extractWithPython(path)
 	if err != nil {
 		log.Printf("[pdfextract] parser=python failed err=%v", err)
