@@ -52,6 +52,23 @@ func (c *OllamaClient) Embed(ctx context.Context, model, text string) ([]float64
 	return nil, fmt.Errorf("embedding failed after retries due to context-length constraints")
 }
 
+func (c *OllamaClient) Healthy(ctx context.Context) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/api/tags", nil)
+	if err != nil {
+		return fmt.Errorf("create ollama health request: %w", err)
+	}
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return fmt.Errorf("ollama health check request failed: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
+		return fmt.Errorf("ollama health check failed status=%d body=%s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	return nil
+}
+
 func (c *OllamaClient) embedOnce(ctx context.Context, model, text string) ([]float64, bool, error) {
 	reqBody := map[string]string{
 		"model":  model,

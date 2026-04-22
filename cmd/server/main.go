@@ -2,8 +2,10 @@ package main
 
 import (
 	_ "embed"
+	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html"
 	"log"
@@ -56,12 +58,14 @@ func main() {
 	}
 	log.Printf("[boot] config loaded port=%s ollama_host=%s qdrant_host=%s collection=%s top_k=%d handbook=%s openrouter_key=%t groq_key=%t llamaparse=%t", cfg.Port, cfg.OllamaHost, cfg.QdrantHost, cfg.CollectionName, cfg.TopK, cfg.HandbookPath, cfg.OpenRouterAPIKey != "", cfg.GroqAPIKey != "", os.Getenv("LLAMA_CLOUD_API_KEY") != "")
 
+	embedClient := embed.NewOllamaClient(cfg.OllamaHost)
+	qdrantClient := qdrant.New(cfg.QdrantHost)
 	ragSvc := rag.NewService(
 		cfg.CollectionName,
 		cfg.TopK,
 		cfg.HandbookPath,
-		embed.NewOllamaClient(cfg.OllamaHost),
-		qdrant.New(cfg.QdrantHost),
+		embedClient,
+		qdrantClient,
 	)
 
 	providerClients := map[string]*llm.OpenAICompatibleClient{
@@ -90,6 +94,8 @@ func main() {
 	mux.HandleFunc("/ingest", handleIngest(ragSvc))
 	mux.HandleFunc("/chat/start", handleChatStart)
 	mux.HandleFunc("/chat/stream", handleChatStream(ragSvc, providerClients, apiKeys))
+	mux.HandleFunc("/health/live", handleHealthLive)
+	mux.HandleFunc("/health/ready", handleHealthReady(embedClient, qdrantClient, cfg))
 	mux.HandleFunc("/dashboard", handleDashboard())
 	mux.HandleFunc("/dashboard/data", handleDashboardData(experimentsPath))
 
@@ -97,6 +103,58 @@ func main() {
 	log.Printf("server listening on %s", addr)
 	if err := http.ListenAndServe(addr, mux); err != nil {
 		log.Fatalf("serve: %v", err)
+	}
+}
+
+type healthResponse struct {
+	Status       string            `json:"status"`
+	Dependencies map[string]string `json:"dependencies,omitempty"`
+}
+
+func writeJSON(w http.ResponseWriter, status int, payload any) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(payload)
+}
+
+func handleHealthLive(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, healthResponse{Status: "ok"})
+}
+
+func handleHealthReady(embedClient *embed.OllamaClient, qdrantClient *qdrant.Client, cfg config.Config) http.HandlerFunc {
+	return func(w http.ResponseWriter, _ *http.Request) {
+		deps := map[string]string{
+			"ollama": "ok",
+			"qdrant": "ok",
+		}
+		overall := "ok"
+
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+
+		if err := embedClient.Healthy(ctx); err != nil {
+			deps["ollama"] = "unavailable"
+			overall = "degraded"
+		}
+		if err := qdrantClient.Healthy(ctx); err != nil {
+			deps["qdrant"] = "unavailable"
+			overall = "degraded"
+		}
+		if strings.TrimSpace(cfg.OpenRouterAPIKey) == "" && strings.TrimSpace(cfg.GroqAPIKey) == "" {
+			deps["llm_provider"] = "unconfigured"
+			overall = "degraded"
+		} else {
+			deps["llm_provider"] = "configured"
+		}
+
+		statusCode := http.StatusOK
+		if overall != "ok" {
+			statusCode = http.StatusServiceUnavailable
+		}
+		writeJSON(w, statusCode, healthResponse{
+			Status:       overall,
+			Dependencies: deps,
+		})
 	}
 }
 
@@ -220,8 +278,9 @@ func handleChatStream(svc *rag.Service, providerClients map[string]*llm.OpenAICo
 
 		prompt, results, err := svc.BuildPrompt(r.Context(), question)
 		if err != nil {
-			log.Printf("[http][%s] retrieval failed: %v", reqID, err)
-			_ = send("streamerror", err.Error())
+			appErr := classifyError(err)
+			log.Printf("[http][%s] retrieval failed code=%s retryable=%t err=%v", reqID, appErr.Code, appErr.Retryable, err)
+			_ = send("streamerror", appErr.UserMessage)
 			return
 		}
 		if len(results) == 0 {
@@ -261,8 +320,9 @@ func handleChatStream(svc *rag.Service, providerClients map[string]*llm.OpenAICo
 		if err := client.StreamAnswer(r.Context(), apiKey, cfg.Model, prompt, func(token string) error {
 			return send("token", token)
 		}); err != nil {
-			log.Printf("[http][%s] stream failed: %v", reqID, err)
-			_ = send("streamerror", err.Error())
+			appErr := classifyError(err)
+			log.Printf("[http][%s] stream failed code=%s retryable=%t err=%v", reqID, appErr.Code, appErr.Retryable, err)
+			_ = send("streamerror", appErr.UserMessage)
 			return
 		}
 
@@ -275,6 +335,56 @@ func handleChatStream(svc *rag.Service, providerClients map[string]*llm.OpenAICo
 		}
 		log.Printf("[http][%s] stream complete duration=%s total_from_query=%s", reqID, streamDuration, totalFromQuery)
 		_ = send("done", "complete")
+	}
+}
+
+type AppError struct {
+	Code       string
+	UserMessage string
+	Retryable  bool
+}
+
+func classifyError(err error) AppError {
+	msg := strings.ToLower(strings.TrimSpace(err.Error()))
+	if errors.Is(err, context.DeadlineExceeded) || strings.Contains(msg, "deadline exceeded") || strings.Contains(msg, "timeout") {
+		return AppError{
+			Code:        "timeout",
+			UserMessage: "Request timed out while contacting search services. Please try again.",
+			Retryable:   true,
+		}
+	}
+	if strings.Contains(msg, "11434") || strings.Contains(msg, "ollama") || strings.Contains(msg, "embed query") {
+		return AppError{
+			Code:        "dependency_unavailable",
+			UserMessage: "Search is temporarily unavailable because the retrieval service is offline. Please try again shortly.",
+			Retryable:   true,
+		}
+	}
+	if strings.Contains(msg, "qdrant") || strings.Contains(msg, "search qdrant") {
+		return AppError{
+			Code:        "dependency_unavailable",
+			UserMessage: "Search index is temporarily unavailable. Please try again in a moment.",
+			Retryable:   true,
+		}
+	}
+	if strings.Contains(msg, "status 429") || strings.Contains(msg, "rate limit") {
+		return AppError{
+			Code:        "rate_limited",
+			UserMessage: "The model is receiving too many requests right now. Please retry shortly.",
+			Retryable:   true,
+		}
+	}
+	if strings.Contains(msg, "no context found") {
+		return AppError{
+			Code:        "no_context",
+			UserMessage: "I couldn't find matching handbook content for that question. Try a more specific academic or policy query.",
+			Retryable:   true,
+		}
+	}
+	return AppError{
+		Code:        "internal",
+		UserMessage: "Something went wrong while generating the answer. Please try again.",
+		Retryable:   true,
 	}
 }
 

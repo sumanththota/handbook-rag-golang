@@ -31,7 +31,8 @@ Set:
 ## Run
 
 ```bash
+go run ./cmd/ingest
 go run ./cmd/server
 ```
 
-Open `http://localhost:8080`, click **Run Ingestion**, then ask questions.
+Run ingestion explicitly as an admin step (re-run whenever the handbook changes), then start the server and open `http://localhost:8080` to ask questions.

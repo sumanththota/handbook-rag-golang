@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -112,6 +113,23 @@ func (c *Client) Search(ctx context.Context, collection string, vector []float64
 		})
 	}
 	return out, nil
+}
+
+func (c *Client) Healthy(ctx context.Context) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/collections", nil)
+	if err != nil {
+		return fmt.Errorf("create qdrant health request: %w", err)
+	}
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return fmt.Errorf("qdrant health check request failed: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
+		return fmt.Errorf("qdrant health check failed status=%d body=%s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	return nil
 }
 
 func (c *Client) request(ctx context.Context, method, path string, body any, out any) error {

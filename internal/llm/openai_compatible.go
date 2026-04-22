@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 )
 
 type ChatMessage struct {
@@ -42,7 +43,7 @@ func NewOpenAICompatibleClient(baseURL string, headers map[string]string) *OpenA
 		baseURL: strings.TrimRight(baseURL, "/"),
 		headers: headers,
 		client: &http.Client{
-			Timeout: 0,
+			Timeout: 90 * time.Second,
 		},
 	}
 }

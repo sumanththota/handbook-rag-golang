@@ -11,67 +11,78 @@ import (
 
 
 const queryRewritePrompt = `You are a Query Rewriter for a University Handbook RAG assistant.
-Your job is to TRIAGE the user query into one of three actions:
-1) rewrite_for_retrieval
-2) graceful_reply
-3) ask_better_question
+Triage every user query into exactly one of three actions.
 
-═══════════════════════════════════
-WHAT YOU MUST DO
-═══════════════════════════════════
-1. For rewrite_for_retrieval:
-   - Preserve the user's exact intent — do not change what they are asking.
-   - Expand abbreviations and shorthand into their full handbook-standard form.
-   - Add only synonyms that a handbook would actually use for the same concept.
-   Safe additions: policy, procedure, requirement, eligibility, deadline,
-                   documentation, approval, guideline, process, criteria
-2. Keep all named entities exactly as written:
-   course codes, office names, program names, person names, dates, acronyms.
-3. For greetings or casual social input (e.g. "hi", "hello", "thanks"), return
-   action=graceful_reply with a short friendly response.
-4. For non-handbook or vague/teasing/low-information queries, return
-   action=ask_better_question with a concise prompt asking for a clearer,
-   handbook-related question.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ACTIONS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+1. rewrite_for_retrieval
+   Use when the query has ANY plausible handbook/academic/admin intent.
+   - Strip irrelevant personal context, emotions, or unrelated facts.
+   - Expand abbreviations only when needed for clarity.
+   - Output keyword-style phrases, NOT full sentences or questions.
+   - Add at most 2-3 anchor terms a handbook would use:
+     policy, procedure, requirement, eligibility, deadline,
+     documentation, approval, guideline, criteria
+   - Keep named entities exactly as written (course codes, office names,
+     program names, acronyms, dates).
+   - Do NOT invent facts, rules, offices, or section references.
+   - Length: 4–14 words. Hard cap: 18 words.
+   - When in doubt, prefer this action.
 
-═══════════════════════════════════
-WHAT YOU MUST NOT DO
-═══════════════════════════════════
-- Do NOT invent handbook facts, offices, rules, dates, or section references.
-- Do NOT output multiple actions.
-- Do NOT include markdown or code fences.
+2. graceful_reply
+   Use ONLY for greetings or casual social input (hi, thanks, bye).
+   - Respond briefly and redirect to handbook topics.
 
-═══════════════════════════════════
+3. ask_better_question
+   Use ONLY as a last resort for clearly off-topic or non-handbook queries
+   (jokes, entertainment, unrelated facts).
+   - Ask concisely for a handbook-related question.
+   - Do NOT use just because the query is short or vague — rewrite it instead.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 OUTPUT — valid JSON only, no markdown
-═══════════════════════════════════
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 {
   "action": "rewrite_for_retrieval" | "graceful_reply" | "ask_better_question",
   "rewritten_query": string,
   "assistant_message": string
 }
 
-- rewrite_for_retrieval:
-  - rewritten_query must be non-empty
-  - assistant_message must be empty
-- graceful_reply:
-  - assistant_message must be non-empty
-  - rewritten_query must be empty
-- ask_better_question:
-  - assistant_message must be non-empty and ask for a clearer handbook question
-  - rewritten_query must be empty
+rewrite_for_retrieval → rewritten_query non-empty, assistant_message empty.
+graceful_reply        → assistant_message non-empty, rewritten_query empty.
+ask_better_question   → assistant_message non-empty, rewritten_query empty.
 
-═══════════════════════════════════
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 EXAMPLES
-═══════════════════════════════════
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 Input:  "when is add drop?"
-Output: {"action":"rewrite_for_retrieval","rewritten_query":"What is the add/drop period deadline, registration change procedure, and timeline for dropping or adding a course?","assistant_message":""}
+Output: {"action":"rewrite_for_retrieval","rewritten_query":"add/drop deadline course registration change procedure","assistant_message":""}
 
-Input: "hi"
-Output: {"action":"graceful_reply","rewritten_query":"","assistant_message":"Hi! I can help with questions from the university handbook. Ask me about policies, deadlines, requirements, or procedures."}
+Input:  "attendance policy?"
+Output: {"action":"rewrite_for_retrieval","rewritten_query":"attendance policy requirements","assistant_message":""}
 
-Input: "say a joke about cats"
-Output: {"action":"ask_better_question","rewritten_query":"","assistant_message":"I can help with university handbook topics. Please ask a specific question about policies, procedures, deadlines, or requirements."}`
+Input:  "scholarship"
+Output: {"action":"rewrite_for_retrieval","rewritten_query":"scholarship eligibility requirements and application deadline","assistant_message":""}
 
+Input:  "I already failed this course once, can I retake it?"
+Output: {"action":"rewrite_for_retrieval","rewritten_query":"course retake policy GPA impact procedure","assistant_message":""}
+
+Input:  "my advisor said I need 120 credits, how do I apply for graduation?"
+Output: {"action":"rewrite_for_retrieval","rewritten_query":"graduation application procedure and requirements","assistant_message":""}
+
+Input:  "I'm so stressed, can I get an incomplete grade?"
+Output: {"action":"rewrite_for_retrieval","rewritten_query":"incomplete grade request eligibility and approval criteria","assistant_message":""}
+
+Input:  "a friend said tuition is due in August, when exactly?"
+Output: {"action":"rewrite_for_retrieval","rewritten_query":"tuition payment deadline","assistant_message":""}
+
+Input:  "hi"
+Output: {"action":"graceful_reply","rewritten_query":"","assistant_message":"Hi! Ask me anything about university policies, deadlines, or procedures."}
+
+Input:  "tell me a joke"
+Output: {"action":"ask_better_question","rewritten_query":"","assistant_message":"I can only help with university handbook topics. Do you have a question about a policy, deadline, or requirement?"}`
 type RewriteAction string
 
 const (
@@ -119,10 +130,22 @@ func rewriteQueryWithLLM(ctx context.Context, client *llm.OpenAICompatibleClient
 				continue
 			}
 			return parsed, nil
-		case GracefulReply, AskBetterQuestion:
+		case GracefulReply:
 			if parsed.AssistantMessage == "" {
 				parseErr = fmt.Errorf("rewrite parse validation attempt=%d: empty assistant_message", attempt)
 				continue
+			}
+			return parsed, nil
+		case AskBetterQuestion:
+			if parsed.AssistantMessage == "" {
+				parseErr = fmt.Errorf("rewrite parse validation attempt=%d: empty assistant_message", attempt)
+				continue
+			}
+			if shouldFallbackToRewrite(question) {
+				return RewriteResult{
+					Action:         RewriteForRetrieval,
+					RewrittenQuery: fallbackRewriteQuery(question),
+				}, nil
 			}
 			return parsed, nil
 		default:
@@ -131,4 +154,43 @@ func rewriteQueryWithLLM(ctx context.Context, client *llm.OpenAICompatibleClient
 	}
 
 	return RewriteResult{}, parseErr
+}
+
+func shouldFallbackToRewrite(question string) bool {
+	q := strings.ToLower(strings.TrimSpace(question))
+	if q == "" {
+		return false
+	}
+	if isClearlyOffTopic(q) {
+		return false
+	}
+	// For most non-empty user questions, prefer retrieval over redirect.
+	return true
+}
+
+func isClearlyOffTopic(q string) bool {
+	offTopicSignals := []string{
+		"joke", "poem", "story", "lyrics", "movie", "recipe", "football",
+		"cricket", "stock price", "crypto price", "weather", "horoscope",
+		"tell me about cats", "tell me about dogs",
+	}
+	for _, s := range offTopicSignals {
+		if strings.Contains(q, s) {
+			return true
+		}
+	}
+	return false
+}
+
+func fallbackRewriteQuery(question string) string {
+	q := strings.TrimSpace(question)
+	if q == "" {
+		return "university handbook policy requirement"
+	}
+	q = strings.Trim(q, "?!.,;:")
+	q = strings.Join(strings.Fields(q), " ")
+	if len(strings.Fields(q)) < 3 {
+		return q + " university handbook policy"
+	}
+	return q
 }
