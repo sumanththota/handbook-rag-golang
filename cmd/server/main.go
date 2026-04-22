@@ -224,6 +224,15 @@ func handleChatStream(svc *rag.Service, providerClients map[string]*llm.OpenAICo
 			_ = send("streamerror", err.Error())
 			return
 		}
+		if len(results) == 0 {
+			emptySourcesJSON, _ := json.Marshal([]any{})
+			_ = send("sources", base64.StdEncoding.EncodeToString(emptySourcesJSON))
+			if prompt != "" {
+				_ = send("token", prompt)
+			}
+			_ = send("done", "complete")
+			return
+		}
 
 		type sourceRow struct {
 			Page  int     `json:"page"`

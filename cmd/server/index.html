@@ -696,12 +696,7 @@
 
   function appendToken(el, token) {
     const t = token.replaceAll("\\n", "\n");
-    const prev = el.textContent;
-    if (prev.length > 0 && /[a-zA-Z0-9]$/.test(prev) && /^[a-zA-Z0-9]/.test(t)) {
-      el.textContent += " " + t;
-    } else {
-      el.textContent += t;
-    }
+    el.textContent += t;
   }
 
   function finishAssistantBubble(target, mdText, sources) {

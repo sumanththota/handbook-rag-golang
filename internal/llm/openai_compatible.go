@@ -47,7 +47,7 @@ func NewOpenAICompatibleClient(baseURL string, headers map[string]string) *OpenA
 	}
 }
 
-func (c *OpenAICompatibleClient) newChatRequest(ctx context.Context, apiKey string, payload chatCompletionRequest) (*http.Request, error) {
+func (c *OpenAICompatibleClient) sendChatRequest(ctx context.Context, apiKey string, payload chatCompletionRequest) (*http.Response, error) {
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return nil, fmt.Errorf("marshal request body: %w", err)
@@ -62,10 +62,6 @@ func (c *OpenAICompatibleClient) newChatRequest(ctx context.Context, apiKey stri
 	for k, v := range c.headers {
 		req.Header.Set(k, v)
 	}
-	return req, nil
-}
-
-func (c *OpenAICompatibleClient) doChatCompletion(req *http.Request) (*http.Response, error) {
 	resp, err := c.client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("send request: %w", err)
@@ -89,12 +85,7 @@ func (c *OpenAICompatibleClient) Complete(ctx context.Context, apiKey, model str
 		Stream:      false,
 	}
 
-	req, err := c.newChatRequest(ctx, apiKey, payload)
-	if err != nil {
-		return "", err
-	}
-
-	resp, err := c.doChatCompletion(req)
+	resp, err := c.sendChatRequest(ctx, apiKey, payload)
 	if err != nil {
 		return "", err
 	}
@@ -128,12 +119,7 @@ Never fabricate policies, dates, or procedures.`,
 		},
 		Stream: true,
 	}
-	req, err := c.newChatRequest(ctx, apiKey, payload)
-	if err != nil {
-		return err
-	}
-
-	resp, err := c.doChatCompletion(req)
+	resp, err := c.sendChatRequest(ctx, apiKey, payload)
 	if err != nil {
 		return err
 	}

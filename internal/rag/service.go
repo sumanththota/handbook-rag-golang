@@ -140,12 +140,18 @@ func (s *Service) BuildPrompt(ctx context.Context, question string) (string, []q
 
 	retrievalQuery := question
 	if s.rewriter != nil {
-		rewrittenQuery, noRewrite, err := rewriteQueryWithLLM(ctx, s.rewriter.Client, s.rewriter.APIKey, s.rewriter.Model, question)
+		rewriteResult, err := rewriteQueryWithLLM(ctx, s.rewriter.Client, s.rewriter.APIKey, s.rewriter.Model, question)
 		if err != nil {
 			log.Printf("[rag][query] rewrite failed fallback_original=true error=%v", err)
 		} else {
-			retrievalQuery = rewrittenQuery
-			log.Printf("[rag][query] rewrite no_rewrite=%t original=%q rewritten=%q", noRewrite, question, retrievalQuery)
+			switch rewriteResult.Action {
+			case RewriteForRetrieval:
+				retrievalQuery = rewriteResult.RewrittenQuery
+				log.Printf("[rag][query] triage action=%s original=%q rewritten=%q", rewriteResult.Action, question, retrievalQuery)
+			case GracefulReply, AskBetterQuestion:
+				log.Printf("[rag][query] triage action=%s direct_reply=true", rewriteResult.Action)
+				return rewriteResult.AssistantMessage, nil, nil
+			}
 		}
 	}
 
