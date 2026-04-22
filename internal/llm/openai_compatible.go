@@ -6,9 +6,30 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 )
+
+type ChatMessage struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
+}
+
+type chatCompletionRequest struct {
+	Model       string        `json:"model"`
+	Messages    []ChatMessage `json:"messages"`
+	Temperature *float64      `json:"temperature,omitempty"`
+	Stream      bool          `json:"stream"`
+}
+
+type chatCompletionResponse struct {
+	Choices []struct {
+		Message struct {
+			Content string `json:"content"`
+		} `json:"message"`
+	} `json:"choices"`
+}
 
 type OpenAICompatibleClient struct {
 	baseURL string
@@ -26,49 +47,97 @@ func NewOpenAICompatibleClient(baseURL string, headers map[string]string) *OpenA
 	}
 }
 
-func (c *OpenAICompatibleClient) StreamAnswer(ctx context.Context, apiKey, model, prompt string, onToken func(string) error) error {
-	payload := map[string]any{
-		"model": model,
-		"messages": []map[string]string{
-			{
-				"role":    "system",
-				"content": `You are a helpful assistant for the University Student Handbook.
-Answer questions using only the provided handbook context in markdown format.
-If the answer is not in the context, respond with: "I couldn't find that in the handbook. Please contact the relevant university office."
-Never fabricate policies, dates, or procedures.`,
-			},
-			{
-				"role":    "user",
-				"content": prompt,
-			},
-		},
-		"stream": true,
-	}
-
+func (c *OpenAICompatibleClient) newChatRequest(ctx context.Context, apiKey string, payload chatCompletionRequest) (*http.Request, error) {
 	body, err := json.Marshal(payload)
 	if err != nil {
-		return fmt.Errorf("marshal request body: %w", err)
+		return nil, fmt.Errorf("marshal request body: %w", err)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/chat/completions", bytes.NewReader(body))
 	if err != nil {
-		return fmt.Errorf("build request: %w", err)
+		return nil, fmt.Errorf("build request: %w", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+apiKey)
 	req.Header.Set("Content-Type", "application/json")
 	for k, v := range c.headers {
 		req.Header.Set(k, v)
 	}
+	return req, nil
+}
 
+func (c *OpenAICompatibleClient) doChatCompletion(req *http.Request) (*http.Response, error) {
 	resp, err := c.client.Do(req)
 	if err != nil {
-		return fmt.Errorf("send request: %w", err)
+		return nil, fmt.Errorf("send request: %w", err)
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		defer resp.Body.Close()
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		if len(body) > 0 {
+			return nil, fmt.Errorf("provider returned status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+		}
+		return nil, fmt.Errorf("provider returned status %d", resp.StatusCode)
+	}
+	return resp, nil
+}
+
+func (c *OpenAICompatibleClient) Complete(ctx context.Context, apiKey, model string, temperature float64, messages []ChatMessage) (string, error) {
+	payload := chatCompletionRequest{
+		Model:       model,
+		Messages:    messages,
+		Temperature: &temperature,
+		Stream:      false,
+	}
+
+	req, err := c.newChatRequest(ctx, apiKey, payload)
+	if err != nil {
+		return "", err
+	}
+
+	resp, err := c.doChatCompletion(req)
+	if err != nil {
+		return "", err
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("provider returned status %d", resp.StatusCode)
+	var out chatCompletionResponse
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return "", fmt.Errorf("decode response: %w", err)
 	}
+	if len(out.Choices) == 0 {
+		return "", fmt.Errorf("empty choices in completion response")
+	}
+	return strings.TrimSpace(out.Choices[0].Message.Content), nil
+}
+
+func (c *OpenAICompatibleClient) StreamAnswer(ctx context.Context, apiKey, model, prompt string, onToken func(string) error) error {
+	payload := chatCompletionRequest{
+		Model: model,
+		Messages: []ChatMessage{
+			{
+				Role: "system",
+				Content: `You are a helpful assistant for the University Student Handbook.
+Answer questions using only the provided handbook context in markdown format.
+If the answer is not in the context, respond with: "I couldn't find that in the handbook. Please contact the relevant university office."
+Never fabricate policies, dates, or procedures.`,
+			},
+			{
+				Role:    "user",
+				Content: prompt,
+			},
+		},
+		Stream: true,
+	}
+	req, err := c.newChatRequest(ctx, apiKey, payload)
+	if err != nil {
+		return err
+	}
+
+	resp, err := c.doChatCompletion(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
 
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)

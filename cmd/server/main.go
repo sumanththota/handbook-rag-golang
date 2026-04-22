@@ -76,6 +76,13 @@ func main() {
 		"GROQ_API_KEY":       cfg.GroqAPIKey,
 	}
 
+	if cfg.OpenRouterAPIKey != "" {
+		ragSvc.SetQueryRewriter(providerClients["openrouter"], cfg.OpenRouterAPIKey, "openai/gpt-4o-mini")
+		log.Printf("[boot] query rewrite enabled provider=openrouter model=openai/gpt-4o-mini")
+	} else {
+		log.Printf("[boot] query rewrite disabled reason=missing OPENROUTER_API_KEY")
+	}
+
 	experimentsPath := "docs/experiments.jsonl"
 
 	mux := http.NewServeMux()

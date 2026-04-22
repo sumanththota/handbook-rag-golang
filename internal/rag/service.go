@@ -9,6 +9,7 @@ import (
 
 	"handbook-rag/internal/chunk"
 	"handbook-rag/internal/embed"
+	"handbook-rag/internal/llm"
 	"handbook-rag/internal/pdfextract"
 	"handbook-rag/internal/qdrant"
 )
@@ -21,6 +22,13 @@ type Service struct {
 	pdfPath     string
 	embedClient *embed.OllamaClient
 	qdrant      *qdrant.Client
+	rewriter    *QueryRewriter
+}
+
+type QueryRewriter struct {
+	Client *llm.OpenAICompatibleClient
+	APIKey string
+	Model  string
 }
 
 func NewService(
@@ -57,6 +65,21 @@ func NewServiceWithParams(
 		pdfPath:     pdfPath,
 		embedClient: embedClient,
 		qdrant:      qdrantClient,
+	}
+}
+
+func (s *Service) SetQueryRewriter(client *llm.OpenAICompatibleClient, apiKey, model string) {
+	apiKey = strings.TrimSpace(apiKey)
+	model = strings.TrimSpace(model)
+	if client == nil || apiKey == "" || model == "" {
+		s.rewriter = nil
+		return
+	}
+
+	s.rewriter = &QueryRewriter{
+		Client: client,
+		APIKey: apiKey,
+		Model:  model,
 	}
 }
 
@@ -115,7 +138,18 @@ func (s *Service) BuildPrompt(ctx context.Context, question string) (string, []q
 	start := time.Now()
 	log.Printf("[rag][query] start question_chars=%d top_k=%d", len(question), s.topK)
 
-	queryEmbedding, err := s.embedClient.Embed(ctx, s.embedModel, question)
+	retrievalQuery := question
+	if s.rewriter != nil {
+		rewrittenQuery, noRewrite, err := rewriteQueryWithLLM(ctx, s.rewriter.Client, s.rewriter.APIKey, s.rewriter.Model, question)
+		if err != nil {
+			log.Printf("[rag][query] rewrite failed fallback_original=true error=%v", err)
+		} else {
+			retrievalQuery = rewrittenQuery
+			log.Printf("[rag][query] rewrite no_rewrite=%t original=%q rewritten=%q", noRewrite, question, retrievalQuery)
+		}
+	}
+
+	queryEmbedding, err := s.embedClient.Embed(ctx, s.embedModel, retrievalQuery)
 	if err != nil {
 		return "", nil, fmt.Errorf("embed query: %w", err)
 	}
