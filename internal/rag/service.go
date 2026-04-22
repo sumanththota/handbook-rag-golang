@@ -111,22 +111,22 @@ func (s *Service) Ingest(ctx context.Context) (int, error) {
 	return len(chunks), nil
 }
 
-func (s *Service) BuildPrompt(ctx context.Context, question string) (string, error) {
+func (s *Service) BuildPrompt(ctx context.Context, question string) (string, []qdrant.SearchResult, error) {
 	start := time.Now()
 	log.Printf("[rag][query] start question_chars=%d top_k=%d", len(question), s.topK)
 
 	queryEmbedding, err := s.embedClient.Embed(ctx, s.embedModel, question)
 	if err != nil {
-		return "", fmt.Errorf("embed query: %w", err)
+		return "", nil, fmt.Errorf("embed query: %w", err)
 	}
 	log.Printf("[rag][query] embedded question vector_dim=%d", len(queryEmbedding))
 
 	results, err := s.qdrant.Search(ctx, s.collection, queryEmbedding, s.topK)
 	if err != nil {
-		return "", fmt.Errorf("search qdrant: %w", err)
+		return "", nil, fmt.Errorf("search qdrant: %w", err)
 	}
 	if len(results) == 0 {
-		return "", fmt.Errorf("no context found; run ingestion first")
+		return "", nil, fmt.Errorf("no context found; run ingestion first")
 	}
 	log.Printf("[rag][query] retrieved context_chunks=%d", len(results))
 
@@ -163,5 +163,5 @@ func (s *Service) BuildPrompt(ctx context.Context, question string) (string, err
 
 	log.Printf("[rag][query] assembled prompt_chars=%d", len(userPrompt))
 	log.Printf("[rag][query] retrieval complete duration=%s", time.Since(start))
-	return userPrompt, nil
+	return userPrompt, results, nil
 }

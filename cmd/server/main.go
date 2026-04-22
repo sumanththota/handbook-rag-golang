@@ -1,6 +1,9 @@
 package main
 
 import (
+	_ "embed"
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"html"
 	"log"
@@ -11,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"handbook-rag/internal/config"
 	"handbook-rag/internal/embed"
@@ -89,6 +93,9 @@ func main() {
 	}
 }
 
+//go:embed index.html
+var indexHTML string
+
 func handleIndex(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	fmt.Fprint(w, indexHTML)
@@ -149,7 +156,7 @@ func handleChatStart(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	fmt.Fprintf(
 		w,
-		`<div class="msg user">%s</div><div class="msg assistant" id="assistant-last"></div><script>window.startAnswerStream("%s","%s","%s");</script>`,
+		`<div class="msg user">%s</div><div class="msg assistant raw" id="assistant-last" data-streaming="1"></div><script>window.startAnswerStream("%s","%s","%s");</script>`,
 		escapedQuestion,
 		escapedQuery,
 		escapedModelID,
@@ -204,10 +211,34 @@ func handleChatStream(svc *rag.Service, providerClients map[string]*llm.OpenAICo
 			return nil
 		}
 
-		prompt, err := svc.BuildPrompt(r.Context(), question)
+		prompt, results, err := svc.BuildPrompt(r.Context(), question)
 		if err != nil {
 			log.Printf("[http][%s] retrieval failed: %v", reqID, err)
-			_ = send("error", err.Error())
+			_ = send("streamerror", err.Error())
+			return
+		}
+
+		type sourceRow struct {
+			Page  int     `json:"page"`
+			Score float64 `json:"score"`
+			Text  string  `json:"text"`
+		}
+		srcRows := make([]sourceRow, 0, len(results))
+		const maxSourceRunes = 220
+		for _, r := range results {
+			t := r.Text
+			if n := utf8.RuneCountInString(t); n > maxSourceRunes {
+				t = string([]rune(t)[:maxSourceRunes]) + "…"
+			}
+			srcRows = append(srcRows, sourceRow{Page: r.Page, Score: r.Score, Text: t})
+		}
+		srcJSON, err := json.Marshal(srcRows)
+		if err != nil {
+			log.Printf("[http][%s] sources marshal: %v", reqID, err)
+			_ = send("streamerror", "internal: could not encode sources")
+			return
+		}
+		if err := send("sources", base64.StdEncoding.EncodeToString(srcJSON)); err != nil {
 			return
 		}
 
@@ -215,7 +246,7 @@ func handleChatStream(svc *rag.Service, providerClients map[string]*llm.OpenAICo
 			return send("token", token)
 		}); err != nil {
 			log.Printf("[http][%s] stream failed: %v", reqID, err)
-			_ = send("error", err.Error())
+			_ = send("streamerror", err.Error())
 			return
 		}
 
@@ -234,90 +265,3 @@ func handleChatStream(svc *rag.Service, providerClients map[string]*llm.OpenAICo
 func newReqID() string {
 	return fmt.Sprintf("%08x", rand.Uint32())
 }
-
-const indexHTML = `<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="UTF-8"/>
-  <meta name="viewport" content="width=device-width, initial-scale=1"/>
-  <title>Handbook RAG</title>
-  <script src="https://unpkg.com/htmx.org@1.9.12"></script>
-  <style>
-    body { font-family: sans-serif; max-width: 800px; margin: 2rem auto; line-height: 1.4; }
-    .msg { margin: 0.75rem 0; padding: 0.75rem; border-radius: 0.5rem; white-space: pre-wrap; }
-    .user { background: #e7f1ff; }
-    .assistant { background: #f7f7f7; min-height: 1.5rem; }
-    .ok { color: #067d06; }
-    .error { color: #b00020; }
-    button { margin-right: 0.5rem; }
-  </style>
-</head>
-<body>
-  <h1>Grad Handbook RAG</h1>
-  <p>Index the PDF first, then ask questions. Answers stream in real time with page-grounded context.</p>
-
-  <section>
-    <button hx-post="/ingest" hx-target="#ingest-status" hx-swap="innerHTML">Run Ingestion</button>
-    <div id="ingest-status"></div>
-  </section>
-
-  <hr />
-
-  <section>
-    <form hx-post="/chat/start" hx-target="#messages" hx-swap="beforeend">
-      <select name="model_id" required>
-        <option value="openrouter_nemotron">OpenRouter - Nemotron Nano 30B (free)</option>
-        <option value="openrouter_llama4_scout">OpenRouter - Llama 4 Scout 17B Instruct</option>
-        <option value="groq_llama31_8b">Groq - Llama 3.1 8B Instant</option>
-      </select>
-      <input type="text" name="question" placeholder="Ask about the handbook..." style="width:75%" required />
-      <button type="submit">Ask</button>
-      <button type="button" id="clear-chat">Clear chat</button>
-    </form>
-    <div id="messages"></div>
-  </section>
-
-  <script>
-    let activeStream = null;
-
-    window.startAnswerStream = function(encodedQuestion, encodedModelID, encodedStartedAtMs) {
-      const target = document.getElementById("assistant-last");
-      if (!target) return;
-
-      if (activeStream) {
-        activeStream.close();
-      }
-
-      const source = new EventSource("/chat/stream?question=" + encodedQuestion + "&model_id=" + encodedModelID + "&started_at_ms=" + encodedStartedAtMs);
-      activeStream = source;
-      source.addEventListener("token", function(ev) {
-        target.textContent += ev.data.replaceAll("\\n", "\n");
-      });
-      source.addEventListener("error", function(ev) {
-        target.textContent += "\n[error] " + ev.data;
-        source.close();
-        if (activeStream === source) {
-          activeStream = null;
-        }
-      });
-      source.addEventListener("done", function() {
-        source.close();
-        if (activeStream === source) {
-          activeStream = null;
-        }
-      });
-    };
-
-    document.getElementById("clear-chat").addEventListener("click", function() {
-      if (activeStream) {
-        activeStream.close();
-        activeStream = null;
-      }
-      const messages = document.getElementById("messages");
-      if (messages) {
-        messages.innerHTML = "";
-      }
-    });
-  </script>
-</body>
-</html>`
