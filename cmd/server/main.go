@@ -8,11 +8,13 @@ import (
 	"errors"
 	"fmt"
 	"html"
+	"io"
 	"log"
 	"math/rand"
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -47,6 +49,11 @@ var modelConfigs = map[string]ModelConfig{
 		Model:    "llama-3.1-8b-instant",
 		EnvKey:   "GROQ_API_KEY",
 	},
+	"ollama_gemma4_26b": {
+		Provider: "ollama",
+		Model:    "gemma4:26b",
+		EnvKey:   "OLLAMA_API_KEY",
+	},
 }
 
 func main() {
@@ -68,24 +75,23 @@ func main() {
 		qdrantClient,
 	)
 
+	ollamaOpenAIBase := strings.TrimRight(cfg.OllamaHost, "/") + "/v1"
 	providerClients := map[string]*llm.OpenAICompatibleClient{
 		"openrouter": llm.NewOpenAICompatibleClient("https://openrouter.ai/api/v1", map[string]string{
 			"HTTP-Referer": "http://localhost",
 			"X-Title":      "handbook-rag",
 		}),
-		"groq": llm.NewOpenAICompatibleClient("https://api.groq.com/openai/v1", nil),
+		"groq":   llm.NewOpenAICompatibleClient("https://api.groq.com/openai/v1", nil),
+		"ollama": llm.NewOpenAICompatibleClient(ollamaOpenAIBase, nil),
 	}
 	apiKeys := map[string]string{
 		"OPENROUTER_API_KEY": cfg.OpenRouterAPIKey,
 		"GROQ_API_KEY":       cfg.GroqAPIKey,
+		"OLLAMA_API_KEY":     cfg.OllamaAPIKey,
 	}
 
-	if cfg.OpenRouterAPIKey != "" {
-		ragSvc.SetQueryRewriter(providerClients["openrouter"], cfg.OpenRouterAPIKey, "openai/gpt-4o-mini")
-		log.Printf("[boot] query rewrite enabled provider=openrouter model=openai/gpt-4o-mini")
-	} else {
-		log.Printf("[boot] query rewrite disabled reason=missing OPENROUTER_API_KEY")
-	}
+	ragSvc.SetQueryRewriter(providerClients["ollama"], cfg.OllamaAPIKey, "gemma4:26b")
+	log.Printf("[boot] query rewrite enabled provider=ollama model=gemma4:26b base=%s", ollamaOpenAIBase)
 
 	experimentsPath := "docs/experiments.jsonl"
 
@@ -98,6 +104,7 @@ func main() {
 	mux.HandleFunc("/health/ready", handleHealthReady(embedClient, qdrantClient, cfg))
 	mux.HandleFunc("/dashboard", handleDashboard())
 	mux.HandleFunc("/dashboard/data", handleDashboardData(experimentsPath))
+	mux.HandleFunc("/docs/upload", handleUploadDoc())
 
 	addr := ":" + cfg.Port
 	log.Printf("server listening on %s", addr)
@@ -140,11 +147,10 @@ func handleHealthReady(embedClient *embed.OllamaClient, qdrantClient *qdrant.Cli
 			deps["qdrant"] = "unavailable"
 			overall = "degraded"
 		}
-		if strings.TrimSpace(cfg.OpenRouterAPIKey) == "" && strings.TrimSpace(cfg.GroqAPIKey) == "" {
-			deps["llm_provider"] = "unconfigured"
-			overall = "degraded"
-		} else {
+		if strings.TrimSpace(cfg.OpenRouterAPIKey) != "" || strings.TrimSpace(cfg.GroqAPIKey) != "" {
 			deps["llm_provider"] = "configured"
+		} else {
+			deps["llm_provider"] = "ollama_local"
 		}
 
 		statusCode := http.StatusOK
@@ -164,6 +170,87 @@ var indexHTML string
 func handleIndex(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	fmt.Fprint(w, indexHTML)
+}
+
+const uploadDocsMaxBytes = 32 << 20
+
+var uploadAllowedExt = map[string]bool{
+	".pdf": true, ".md": true, ".txt": true, ".html": true, ".htm": true,
+}
+
+func handleUploadDoc() http.HandlerFunc {
+	docsDir := "docs"
+	return func(w http.ResponseWriter, r *http.Request) {
+		reqID := newReqID()
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		if err := r.ParseMultipartForm(uploadDocsMaxBytes); err != nil {
+			log.Printf("[http][%s] upload parse form: %v", reqID, err)
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid or too large upload"})
+			return
+		}
+		f, hdr, err := r.FormFile("file")
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "file is required"})
+			return
+		}
+		defer f.Close()
+
+		base := filepath.Base(hdr.Filename)
+		if base == "." || base == ".." {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid filename"})
+			return
+		}
+		ext := strings.ToLower(filepath.Ext(base))
+		if !uploadAllowedExt[ext] {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "allowed types: .pdf, .md, .txt, .html"})
+			return
+		}
+
+		if err := os.MkdirAll(docsDir, 0o755); err != nil {
+			log.Printf("[http][%s] upload mkdir: %v", reqID, err)
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not prepare docs folder"})
+			return
+		}
+		dest := filepath.Join(docsDir, base)
+		absDest, err := filepath.Abs(dest)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not resolve path"})
+			return
+		}
+		absDir, err := filepath.Abs(docsDir)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not resolve path"})
+			return
+		}
+		rel, err := filepath.Rel(absDir, absDest)
+		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid path"})
+			return
+		}
+
+		out, err := os.Create(absDest)
+		if err != nil {
+			log.Printf("[http][%s] upload create: %v", reqID, err)
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not save file"})
+			return
+		}
+		written, err := io.Copy(out, f)
+		if cerr := out.Close(); err == nil {
+			err = cerr
+		}
+		if err != nil {
+			_ = os.Remove(absDest)
+			log.Printf("[http][%s] upload write: %v", reqID, err)
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not write file"})
+			return
+		}
+
+		log.Printf("[http][%s] upload ok name=%s bytes=%d", reqID, base, written)
+		writeJSON(w, http.StatusOK, map[string]string{"name": base})
+	}
 }
 
 func handleIngest(svc *rag.Service) http.HandlerFunc {
@@ -252,7 +339,7 @@ func handleChatStream(svc *rag.Service, providerClients map[string]*llm.OpenAICo
 			return
 		}
 		apiKey := strings.TrimSpace(apiKeys[cfg.EnvKey])
-		if apiKey == "" {
+		if apiKey == "" && cfg.Provider != "ollama" {
 			http.Error(w, fmt.Sprintf("missing %s for selected provider", cfg.EnvKey), http.StatusBadRequest)
 			return
 		}
@@ -280,7 +367,7 @@ func handleChatStream(svc *rag.Service, providerClients map[string]*llm.OpenAICo
 		if err != nil {
 			appErr := classifyError(err)
 			log.Printf("[http][%s] retrieval failed code=%s retryable=%t err=%v", reqID, appErr.Code, appErr.Retryable, err)
-			_ = send("streamerror", appErr.UserMessage)
+			_ = send("streamerror", encodeStreamErrorPayload(appErr))
 			return
 		}
 		if len(results) == 0 {
@@ -310,7 +397,11 @@ func handleChatStream(svc *rag.Service, providerClients map[string]*llm.OpenAICo
 		srcJSON, err := json.Marshal(srcRows)
 		if err != nil {
 			log.Printf("[http][%s] sources marshal: %v", reqID, err)
-			_ = send("streamerror", "internal: could not encode sources")
+			_ = send("streamerror", encodeStreamErrorPayload(AppError{
+				Code:        "internal",
+				UserMessage: "Something went wrong while preparing the response context. Please try again.",
+				Retryable:   true,
+			}))
 			return
 		}
 		if err := send("sources", base64.StdEncoding.EncodeToString(srcJSON)); err != nil {
@@ -322,7 +413,7 @@ func handleChatStream(svc *rag.Service, providerClients map[string]*llm.OpenAICo
 		}); err != nil {
 			appErr := classifyError(err)
 			log.Printf("[http][%s] stream failed code=%s retryable=%t err=%v", reqID, appErr.Code, appErr.Retryable, err)
-			_ = send("streamerror", appErr.UserMessage)
+			_ = send("streamerror", encodeStreamErrorPayload(appErr))
 			return
 		}
 
@@ -342,6 +433,11 @@ type AppError struct {
 	Code       string
 	UserMessage string
 	Retryable  bool
+}
+
+type streamErrorPayload struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
 }
 
 func classifyError(err error) AppError {
@@ -386,6 +482,17 @@ func classifyError(err error) AppError {
 		UserMessage: "Something went wrong while generating the answer. Please try again.",
 		Retryable:   true,
 	}
+}
+
+func encodeStreamErrorPayload(appErr AppError) string {
+	payload, err := json.Marshal(streamErrorPayload{
+		Code:    appErr.Code,
+		Message: appErr.UserMessage,
+	})
+	if err != nil {
+		return appErr.UserMessage
+	}
+	return base64.StdEncoding.EncodeToString(payload)
 }
 
 func newReqID() string {

@@ -8,14 +8,15 @@ import (
 )
 
 type Config struct {
-	Port            string
+	Port             string
 	OpenRouterAPIKey string
-	GroqAPIKey      string
-	HandbookPath    string
-	OllamaHost      string
-	QdrantHost      string
-	CollectionName  string
-	TopK            int
+	GroqAPIKey       string
+	HandbookPath     string
+	OllamaHost       string
+	OllamaAPIKey     string
+	QdrantHost       string
+	CollectionName   string
+	TopK             int
 }
 
 func Load() (Config, error) {
@@ -27,6 +28,7 @@ func Load() (Config, error) {
 		GroqAPIKey:       os.Getenv("GROQ_API_KEY"),
 		HandbookPath:     os.Getenv("HANDBOOK_PATH"),
 		OllamaHost:       getEnvOrDefault("OLLAMA_HOST", "http://localhost:11434"),
+		OllamaAPIKey:     strings.TrimSpace(os.Getenv("OLLAMA_API_KEY")),
 		QdrantHost:       getEnvOrDefault("QDRANT_HOST", "http://localhost:6333"),
 		CollectionName:   getEnvOrDefault("QDRANT_COLLECTION", "handbook_chunks"),
 		TopK:             10,

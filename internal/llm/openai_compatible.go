@@ -9,7 +9,6 @@ import (
 	"io"
 	"net/http"
 	"strings"
-	"time"
 )
 
 type ChatMessage struct {
@@ -42,9 +41,7 @@ func NewOpenAICompatibleClient(baseURL string, headers map[string]string) *OpenA
 	return &OpenAICompatibleClient{
 		baseURL: strings.TrimRight(baseURL, "/"),
 		headers: headers,
-		client: &http.Client{
-			Timeout: 90 * time.Second,
-		},
+		client:  &http.Client{},
 	}
 }
 
@@ -58,7 +55,9 @@ func (c *OpenAICompatibleClient) sendChatRequest(ctx context.Context, apiKey str
 	if err != nil {
 		return nil, fmt.Errorf("build request: %w", err)
 	}
-	req.Header.Set("Authorization", "Bearer "+apiKey)
+	if key := strings.TrimSpace(apiKey); key != "" {
+		req.Header.Set("Authorization", "Bearer "+key)
+	}
 	req.Header.Set("Content-Type", "application/json")
 	for k, v := range c.headers {
 		req.Header.Set(k, v)

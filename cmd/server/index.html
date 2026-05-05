@@ -401,6 +401,44 @@
       font-family: inherit;
     }
     .msg.assistant .copy-btn:hover { background: #475569; }
+    .rate-limit-card {
+      border: 1px solid #fcd34d;
+      background: linear-gradient(180deg, #fffbeb 0%, #fff7ed 100%);
+      border-radius: var(--radius-sm);
+      padding: 0.75rem 0.85rem;
+    }
+    .rate-limit-card h3 {
+      margin: 0 0 0.25rem;
+      font-size: 0.92rem;
+      color: #92400e;
+      font-weight: 650;
+    }
+    .rate-limit-card p {
+      margin: 0;
+      font-size: 0.84rem;
+      color: #7c2d12;
+    }
+    .rate-actions {
+      margin-top: 0.55rem;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.4rem;
+    }
+    .rate-actions button {
+      font-family: inherit;
+      font-size: 0.76rem;
+      font-weight: 600;
+      border-radius: 999px;
+      border: 1px solid #fdba74;
+      color: #9a3412;
+      background: #fff;
+      padding: 0.3rem 0.65rem;
+      cursor: pointer;
+    }
+    .rate-actions button:hover {
+      background: #ffedd5;
+      border-color: #fb923c;
+    }
     .composer {
       background: var(--bg-elevated);
       border: 1px solid var(--border);
@@ -555,6 +593,8 @@
       <div class="thread-actions">
         <button type="button" class="btn btn-primary btn-sm" id="btn-new-chat">New chat</button>
         <button type="button" class="btn btn-sm" id="btn-export">Export .md</button>
+        <input type="file" id="input-upload-doc" class="visually-hidden" accept=".pdf,.md,.txt,.html,.htm" />
+        <button type="button" class="btn btn-sm" id="btn-upload-doc" title="Save a file into the project docs folder on the server">Upload to docs</button>
       </div>
       <div class="thread-actions">
         <button type="button" class="btn btn-danger btn-sm" id="btn-clear-storage">Clear local data</button>
@@ -579,6 +619,7 @@
                 <option value="openrouter_nemotron">OpenRouter — Nemotron Nano 30B (free)</option>
                 <option value="openrouter_llama4_scout">OpenRouter — Llama 4 Scout 17B</option>
                 <option value="groq_llama31_8b">Groq — Llama 3.1 8B Instant</option>
+                <option value="ollama_gemma4_26b">Ollama — Gemma 4 26B (local)</option>
               </select>
               <span class="kbd-tip">Enter to send - Shift+Enter newline</span>
             </div>
@@ -592,7 +633,6 @@
           <div class="chips">
             <span class="chips-label">Try</span>
             <button type="button" data-q="What is the policy on academic integrity and misconduct reporting?">Academic integrity</button>
-            <button type="button" data-q="What are the official steps and timelines to file a graduate student grievance?">Grievance process</button>
             <button type="button" data-q="What are the degree completion and graduation filing requirements?">Degree completion</button>
           </div>
         </div>
@@ -773,6 +813,68 @@
   function appendToken(el, token) {
     const t = token.replaceAll("\\n", "\n");
     el.textContent += t;
+  }
+
+  function parseStreamErrorPayload(raw) {
+    if (!raw) return { code: "internal", message: "Something went wrong. Please try again." };
+    try {
+      const decoded = atob(raw.trim());
+      const parsed = JSON.parse(decoded);
+      if (parsed && parsed.message) {
+        return { code: parsed.code || "internal", message: parsed.message };
+      }
+    } catch (e) {
+      // Fall through to plain text fallback.
+    }
+    return { code: "internal", message: raw };
+  }
+
+  function finishRateLimitBubble(target, message, originalQuestion, currentModelID) {
+    if (!target || target.dataset.saved === "1") return;
+    target.dataset.saved = "1";
+    target.removeAttribute("id");
+    target.removeAttribute("data-streaming");
+    target.classList.remove("raw");
+
+    const box = document.createElement("div");
+    box.className = "rate-limit-card";
+    box.innerHTML = "<h3>Rate limit reached</h3><p>" + escapeHtml(message) + "</p>";
+
+    const actions = document.createElement("div");
+    actions.className = "rate-actions";
+
+    const modelSelect = document.getElementById("model-select");
+    if (modelSelect) {
+      Array.from(modelSelect.options).forEach(function (opt) {
+        if (opt.value === currentModelID) return;
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.textContent = "Switch to " + opt.text;
+        btn.addEventListener("click", function () {
+          modelSelect.value = opt.value;
+          modelSelect.dispatchEvent(new Event("change"));
+          const qInput = document.getElementById("q-input");
+          qInput.value = originalQuestion;
+          qInput.focus();
+        });
+        actions.appendChild(btn);
+      });
+    }
+
+    const retryBtn = document.createElement("button");
+    retryBtn.type = "button";
+    retryBtn.textContent = "Retry with selected model";
+    retryBtn.addEventListener("click", function () {
+      const qInput = document.getElementById("q-input");
+      qInput.value = originalQuestion;
+      document.getElementById("chat-form").requestSubmit();
+    });
+    actions.appendChild(retryBtn);
+
+    box.appendChild(actions);
+    target.textContent = "";
+    target.appendChild(box);
+    persistTurn(target, "Rate limit reached. Please switch to another model and retry.", lastSources);
   }
 
   function finishAssistantBubble(target, mdText, sources) {
@@ -1022,9 +1124,13 @@
 
     source.addEventListener("streamerror", function (ev) {
       hideThinkingIndicator();
-      const msg = (ev && ev.data) ? ev.data : "stream error";
-      target.textContent += (target.textContent ? "\n\n" : "") + "[Error] " + msg;
-      finishAssistantBubble(target, target.textContent.trim(), lastSources);
+      const parsed = parseStreamErrorPayload((ev && ev.data) ? ev.data : "");
+      if (parsed.code === "rate_limited") {
+        finishRateLimitBubble(target, parsed.message, decodeURIComponent(encodedQuestion), decodeURIComponent(encodedModelID));
+      } else {
+        target.textContent += (target.textContent ? "\n\n" : "") + parsed.message;
+        finishAssistantBubble(target, target.textContent.trim(), lastSources);
+      }
       streamCleanClose = true;
       source.close();
       if (activeStream === source) activeStream = null;
@@ -1114,6 +1220,34 @@
 
   document.getElementById("btn-new-chat").addEventListener("click", newChat);
   document.getElementById("btn-export").addEventListener("click", exportMarkdown);
+  document.getElementById("btn-upload-doc").addEventListener("click", function () {
+    document.getElementById("input-upload-doc").click();
+  });
+  document.getElementById("input-upload-doc").addEventListener("change", function (ev) {
+    const input = ev.target;
+    const file = input.files && input.files[0];
+    if (!file) return;
+    const fd = new FormData();
+    fd.append("file", file, file.name);
+    setActivity("Uploading…");
+    fetch("/docs/upload", { method: "POST", body: fd })
+      .then(function (res) {
+        return res.json().then(function (j) { return { ok: res.ok, j: j }; });
+      })
+      .then(function (x) {
+        if (x.ok && x.j && x.j.name) {
+          setActivity("Ready · saved docs/" + x.j.name);
+        } else {
+          setActivity("Ready");
+          window.alert((x.j && x.j.error) || "Upload failed.");
+        }
+      })
+      .catch(function () {
+        setActivity("Ready");
+        window.alert("Upload failed (network).");
+      });
+    input.value = "";
+  });
   document.getElementById("btn-clear-storage").addEventListener("click", clearAllStorage);
 
   document.querySelectorAll(".chips button[data-q]").forEach(function (b) {

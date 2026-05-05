@@ -56,6 +56,11 @@ var models = map[string]modelDef{
 		model:    "llama-3.1-8b-instant",
 		envKey:   "GROQ_API_KEY",
 	},
+	"ollama_gemma4_26b": {
+		provider: "ollama",
+		model:    "gemma4:26b",
+		envKey:   "OLLAMA_API_KEY",
+	},
 }
 
 func main() {
@@ -201,9 +206,10 @@ func setupLLM(modelID string, cfg config.Config) (*llm.OpenAICompatibleClient, s
 	apiKeys := map[string]string{
 		"OPENROUTER_API_KEY": cfg.OpenRouterAPIKey,
 		"GROQ_API_KEY":       cfg.GroqAPIKey,
+		"OLLAMA_API_KEY":     cfg.OllamaAPIKey,
 	}
-	apiKey := apiKeys[md.envKey]
-	if apiKey == "" {
+	apiKey := strings.TrimSpace(apiKeys[md.envKey])
+	if apiKey == "" && md.provider != "ollama" {
 		log.Printf("[eval] missing %s — skipping LLM", md.envKey)
 		return nil, "", ""
 	}
@@ -217,6 +223,8 @@ func setupLLM(modelID string, cfg config.Config) (*llm.OpenAICompatibleClient, s
 		})
 	case "groq":
 		client = llm.NewOpenAICompatibleClient("https://api.groq.com/openai/v1", nil)
+	case "ollama":
+		client = llm.NewOpenAICompatibleClient(strings.TrimRight(cfg.OllamaHost, "/")+"/v1", nil)
 	default:
 		log.Printf("[eval] unknown provider=%s", md.provider)
 		return nil, "", ""

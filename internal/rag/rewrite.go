@@ -27,7 +27,7 @@ ACTIONS
    - Keep named entities exactly as written (course codes, office names,
      program names, acronyms, dates).
    - Do NOT invent facts, rules, offices, or section references.
-   - Length: 4–14 words. Hard cap: 18 words.
+   - Length: 4 to 14 words. Hard cap: 18 words.
    - When in doubt, prefer this action.
 
 2. graceful_reply
