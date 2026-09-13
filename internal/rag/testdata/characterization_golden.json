@@ -1,0 +1,143 @@
+{
+  "chunk_count": 117,
+  "questions": [
+    {
+      "question": "What is the minimum GPA required to remain in good academic standing?",
+      "prompt_hash_md5": "fc0949ed02e18369bc4df9ad1d4541f9",
+      "results": [
+        {
+          "page": 48,
+          "score": 0.736368
+        },
+        {
+          "page": 25,
+          "score": 0.733893
+        },
+        {
+          "page": 30,
+          "score": 0.703715
+        },
+        {
+          "page": 48,
+          "score": 0.691147
+        },
+        {
+          "page": 24,
+          "score": 0.682243
+        },
+        {
+          "page": 53,
+          "score": 0.676765
+        },
+        {
+          "page": 38,
+          "score": 0.671763
+        },
+        {
+          "page": 31,
+          "score": 0.666397
+        },
+        {
+          "page": 33,
+          "score": 0.664991
+        },
+        {
+          "page": 35,
+          "score": 0.661435
+        }
+      ]
+    },
+    {
+      "question": "How many credit hours are required to graduate?",
+      "prompt_hash_md5": "c665039d23b284f5f2baac8e1f7e80a5",
+      "results": [
+        {
+          "page": 53,
+          "score": 0.77356
+        },
+        {
+          "page": 33,
+          "score": 0.753128
+        },
+        {
+          "page": 33,
+          "score": 0.748363
+        },
+        {
+          "page": 25,
+          "score": 0.738325
+        },
+        {
+          "page": 32,
+          "score": 0.726874
+        },
+        {
+          "page": 40,
+          "score": 0.723905
+        },
+        {
+          "page": 24,
+          "score": 0.723558
+        },
+        {
+          "page": 27,
+          "score": 0.722368
+        },
+        {
+          "page": 20,
+          "score": 0.722129
+        },
+        {
+          "page": 35,
+          "score": 0.714105
+        }
+      ]
+    },
+    {
+      "question": "What is the policy on academic probation or dismissal?",
+      "prompt_hash_md5": "04720056ffea678009be01102ff82b39",
+      "results": [
+        {
+          "page": 50,
+          "score": 0.755817
+        },
+        {
+          "page": 48,
+          "score": 0.750943
+        },
+        {
+          "page": 50,
+          "score": 0.733245
+        },
+        {
+          "page": 49,
+          "score": 0.722113
+        },
+        {
+          "page": 48,
+          "score": 0.691244
+        },
+        {
+          "page": 25,
+          "score": 0.675396
+        },
+        {
+          "page": 38,
+          "score": 0.671621
+        },
+        {
+          "page": 8,
+          "score": 0.652498
+        },
+        {
+          "page": 39,
+          "score": 0.652305
+        },
+        {
+          "page": 45,
+          "score": 0.651978
+        }
+      ]
+    }
+  ]
+}
