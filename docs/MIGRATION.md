@@ -2,6 +2,15 @@
 
 Agents: read this before touching any file. Don't re-derive conventions per-file — follow the mappings below. If a case isn't covered here, stop and ask rather than improvising a convention.
 
+## 0. Repos
+
+This is a two-repo migration, not a subdirectory port:
+
+- **Source (this repo):** `handbook-rag-golang` — read-only reference during the port. This file lives here because it documents how to leave it.
+- **Target:** [`rag-engine`](https://github.com/sumanththota/rag-engine) — a separate public repo, sibling directory on disk (`../rag-engine` relative to this repo). All `app/...` paths below are relative to that repo's root, not a subdirectory of this one.
+
+Agents working in `rag-engine` reference this file and this repo's `internal/<module>` source by filesystem path across the sibling directories — there is no shared git history or worktree between the two repos, and none is needed.
+
 ## 1. Scope
 
 - **Language port:** `handbook-rag` (Go, stdlib-only, 13 files / ~1400 LOC) → Python FastAPI.
